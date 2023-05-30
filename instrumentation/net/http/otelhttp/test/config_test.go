@@ -15,6 +15,7 @@
 package test
 
 import (
+	"go.opentelemetry.io/otel/attribute"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,44 @@ func TestBasicFilter(t *testing.T) {
 	}
 	if got, expected := string(d), "hello world"; got != expected {
 		t.Fatalf("got %q, expected %q", got, expected)
+	}
+}
+
+func TestBasicAttributeFilter(t *testing.T) {
+	rr := httptest.NewRecorder()
+
+	spanRecorder := tracetest.NewSpanRecorder()
+	provider := trace.NewTracerProvider(trace.WithSpanProcessor(spanRecorder))
+	filteredKey := attribute.Key("http.method")
+
+	h := otelhttp.NewHandler(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, err := io.WriteString(w, "hello world"); err != nil {
+				t.Fatal(err)
+			}
+		}), "test_handler",
+		otelhttp.WithTracerProvider(provider),
+		otelhttp.WithAttributeFilter(func(a attribute.KeyValue) bool {
+			return a.Key != filteredKey
+		}),
+	)
+
+	r, err := http.NewRequest(http.MethodGet, "http://localhost/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.ServeHTTP(rr, r)
+	if got, expected := rr.Result().StatusCode, http.StatusOK; got != expected {
+		t.Fatalf("got %d, expected %d", got, expected)
+	}
+	if got := rr.Header().Get("Traceparent"); got != "" {
+		t.Fatal("expected empty trace header")
+	}
+	spans := spanRecorder.Ended()
+	if assert.Len(t, spans, 1) {
+		for _, a := range spans[0].Attributes() {
+			assert.NotEqual(t, filteredKey, a.Key)
+		}
 	}
 }
 

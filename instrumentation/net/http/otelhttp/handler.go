@@ -48,6 +48,7 @@ type Handler struct {
 	readEvent         bool
 	writeEvent        bool
 	filters           []Filter
+	attributeFilters  []AttributeFilter
 	spanNameFormatter func(string, *http.Request) string
 	counters          map[string]metric.Int64Counter
 	valueRecorders    map[string]metric.Float64Histogram
@@ -87,6 +88,7 @@ func (h *Handler) configure(c *config) {
 	h.readEvent = c.ReadEvent
 	h.writeEvent = c.WriteEvent
 	h.filters = c.Filters
+	h.attributeFilters = c.AttributeFilters
 	h.spanNameFormatter = c.SpanNameFormatter
 	h.publicEndpoint = c.PublicEndpoint
 	h.publicEndpointFn = c.PublicEndpointFn
@@ -130,7 +132,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := h.propagators.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 	opts := []trace.SpanStartOption{
-		trace.WithAttributes(semconvutil.HTTPServerRequest(h.server, r)...),
+		trace.WithAttributes(h.filterAttributes(semconvutil.HTTPServerRequest(h.server, r))...),
 	}
 	if h.server != "" {
 		hostAttr := semconv.NetHostName(h.server)
@@ -218,7 +220,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if rww.statusCode > 0 {
 		attributes = append(attributes, semconv.HTTPStatusCode(rww.statusCode))
 	}
-	o := metric.WithAttributes(attributes...)
+	o := metric.WithAttributes(h.filterAttributes(attributes)...)
 	h.counters[RequestContentLength].Add(ctx, bw.read, o)
 	h.counters[ResponseContentLength].Add(ctx, rww.written, o)
 
@@ -261,4 +263,30 @@ func WithRouteTag(route string, h http.Handler) http.Handler {
 		span.SetAttributes(semconv.HTTPRoute(route))
 		h.ServeHTTP(w, r)
 	})
+}
+
+// filterAttributes returns array attributes without the one that should be filtered out
+// from option attributeFilters
+func (h *Handler) filterAttributes(attributes []attribute.KeyValue) []attribute.KeyValue {
+	if len(h.attributeFilters) == 0 {
+		return attributes
+	}
+	var result []attribute.KeyValue
+	for _, att := range attributes {
+		if h.shouldIncludeAttribute(att) {
+			result = append(result, att)
+		}
+	}
+	return result
+}
+
+// shouldIncludeAttribute return true if attribute should be included
+// ie not filtered out
+func (h *Handler) shouldIncludeAttribute(att attribute.KeyValue) bool {
+	for _, af := range h.attributeFilters {
+		if !af(att) {
+			return false
+		}
+	}
+	return true
 }

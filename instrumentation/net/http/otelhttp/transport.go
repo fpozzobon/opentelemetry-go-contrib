@@ -16,6 +16,7 @@ package otelhttp // import "go.opentelemetry.io/contrib/instrumentation/net/http
 
 import (
 	"context"
+	"go.opentelemetry.io/otel/attribute"
 	"io"
 	"net/http"
 	"net/http/httptrace"
@@ -36,6 +37,7 @@ type Transport struct {
 	propagators       propagation.TextMapPropagator
 	spanStartOptions  []trace.SpanStartOption
 	filters           []Filter
+	attributeFilters  []AttributeFilter
 	spanNameFormatter func(string, *http.Request) string
 	clientTrace       func(context.Context) *httptrace.ClientTrace
 }
@@ -72,6 +74,7 @@ func (t *Transport) applyConfig(c *config) {
 	t.propagators = c.Propagators
 	t.spanStartOptions = c.SpanStartOptions
 	t.filters = c.Filters
+	t.attributeFilters = c.AttributeFilters
 	t.spanNameFormatter = c.SpanNameFormatter
 	t.clientTrace = c.ClientTrace
 }
@@ -110,7 +113,8 @@ func (t *Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 
 	r = r.WithContext(ctx)
-	span.SetAttributes(semconvutil.HTTPClientRequest(r)...)
+
+	span.SetAttributes(t.filterAttributes(semconvutil.HTTPClientRequest(r))...)
 	t.propagators.Inject(ctx, propagation.HeaderCarrier(r.Header))
 
 	res, err := t.rt.RoundTrip(r)
@@ -121,11 +125,37 @@ func (t *Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return res, err
 	}
 
-	span.SetAttributes(semconvutil.HTTPClientResponse(res)...)
+	span.SetAttributes(t.filterAttributes(semconvutil.HTTPClientResponse(res))...)
 	span.SetStatus(semconvutil.HTTPClientStatus(res.StatusCode))
 	res.Body = newWrappedBody(span, res.Body)
 
 	return res, err
+}
+
+// filterAttributes returns array attributes without the one that should be filtered out
+// from option attributeFilters
+func (t *Transport) filterAttributes(attributes []attribute.KeyValue) []attribute.KeyValue {
+	if len(t.attributeFilters) == 0 {
+		return attributes
+	}
+	var result []attribute.KeyValue
+	for _, att := range attributes {
+		if t.shouldIncludeAttribute(att) {
+			result = append(result, att)
+		}
+	}
+	return result
+}
+
+// shouldIncludeAttribute return true if attribute should be included
+// ie not filtered out
+func (t *Transport) shouldIncludeAttribute(att attribute.KeyValue) bool {
+	for _, af := range t.attributeFilters {
+		if !af(att) {
+			return false
+		}
+	}
+	return true
 }
 
 // newWrappedBody returns a new and appropriately scoped *wrappedBody as an

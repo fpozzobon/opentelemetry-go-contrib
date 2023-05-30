@@ -41,6 +41,10 @@ const (
 // be traced. A Filter must return true if the request should be traced.
 type Filter func(*http.Request) bool
 
+// AttributeFilter is a predicate used to determine if an attribute should be excluded
+// or not. AttributeFilter must return true if the attribute should be set.
+type AttributeFilter func(attribute.KeyValue) bool
+
 func newTracer(tp trace.TracerProvider) trace.Tracer {
 	return tp.Tracer(instrumentationName, trace.WithInstrumentationVersion(Version()))
 }

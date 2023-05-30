@@ -42,6 +42,7 @@ type config struct {
 	ReadEvent         bool
 	WriteEvent        bool
 	Filters           []Filter
+	AttributeFilters  []AttributeFilter
 	SpanNameFormatter func(string, *http.Request) string
 	ClientTrace       func(context.Context) *httptrace.ClientTrace
 
@@ -150,6 +151,18 @@ func WithSpanOptions(opts ...trace.SpanStartOption) Option {
 func WithFilter(f Filter) Option {
 	return optionFunc(func(c *config) {
 		c.Filters = append(c.Filters, f)
+	})
+}
+
+// WithAttributeFilter adds an excluded attribute to the list of excluded attributes used by the handler.
+// If any filter indicates to exclude a request then the request will not be
+// traced. All filters must allow a request to be traced for a Span to be created.
+// If no filters are provided then all requests are traced.
+// Filters will be invoked for each processed request, it is advised to make them
+// simple and fast.
+func WithAttributeFilter(e AttributeFilter) Option {
+	return optionFunc(func(c *config) {
+		c.AttributeFilters = append(c.AttributeFilters, e)
 	})
 }
 
